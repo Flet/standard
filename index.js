@@ -1,8 +1,10 @@
 module.exports = standard
 
 var auto = require('run-auto')
+var concat = require('concat-stream')
 var cp = require('child_process')
 var debug = require('debug')('standard')
+var eslint = require('eslint')
 var findRoot = require('find-root')
 var fs = require('fs')
 var glob = require('glob')
@@ -12,14 +14,13 @@ var path = require('path')
 var split = require('split')
 var standardFormat = require('standard-format')
 var uniq = require('uniq')
+var util = require('util')
 
 var JSCS_RC = path.join(__dirname, 'rc', '.jscsrc')
 var JSCS_REPORTER = path.join(__dirname, 'lib', 'jscs-reporter.js')
 var JSCS_REPORTER_VERBOSE = path.join(__dirname, 'lib', 'jscs-reporter-verbose.js')
 
 var ESLINT_RC = path.join(__dirname, 'rc', '.eslintrc')
-var ESLINT_REPORTER = path.join(__dirname, 'lib', 'eslint-reporter.js')
-var ESLINT_REPORTER_VERBOSE = path.join(__dirname, 'lib', 'eslint-reporter-verbose.js')
 
 var DEFAULT_IGNORE = [
   '**/node_modules/**',
@@ -63,9 +64,6 @@ function standard (opts) {
 
   var jscsReporter = opts.verbose ? JSCS_REPORTER_VERBOSE : JSCS_REPORTER
   var jscsArgs = ['--config', JSCS_RC, '--reporter', jscsReporter]
-
-  var eslintReporter = opts.verbose ? ESLINT_REPORTER_VERBOSE : ESLINT_REPORTER
-  var eslintArgs = ['--config', ESLINT_RC, '--format', eslintReporter]
 
   if (opts.verbose) {
     jscsArgs.push('--verbose')
@@ -115,13 +113,11 @@ function standard (opts) {
           format(files)
         }
         jscsArgs = jscsArgs.concat(files)
-        eslintArgs = eslintArgs.concat(files)
-        lint()
+        lint(files)
       }
     })
   } else {
     // stdin
-    eslintArgs.push('--stdin')
     lint()
   }
 
@@ -132,13 +128,10 @@ function standard (opts) {
     })
   }
 
-  function lint () {
+  function lint (files) {
     auto({
-      eslintPath: findBinPath.bind(undefined, 'eslint'),
       jscsPath: findBinPath.bind(undefined, 'jscs'),
-      eslint: ['eslintPath', function (cb, r) {
-        spawn(r.eslintPath, eslintArgs, cb)
-      }],
+      eslint: runEslint.bind(undefined, files),
       jscs: ['jscsPath', function (cb, r) {
         spawn(r.jscsPath, jscsArgs, cb)
       }]
@@ -146,6 +139,40 @@ function standard (opts) {
       if (err) return error(err)
       if (r.eslint !== 0 || r.jscs !== 0) printErrors()
     })
+  }
+
+  function runEslint (files, cb) {
+    var engine = new eslint.CLIEngine({
+        configFile: ESLINT_RC
+    })
+
+    if (!files) {
+      process.stdin.pipe(concat({
+        encoding: 'string'
+      }, function (text) {
+        cb(null, parseEslintResults(engine.executeOnText(text)))
+      }))
+    } else {
+      cb(null, parseEslintResults(engine.executeOnFiles(files)))
+    }
+  }
+
+  function parseEslintResults (eslintResults) {
+    var template = opts.verbose ? '%s:%d:%d: %s (eslint/%s)' : '%s:%d:%d: %s'
+
+    eslintResults.results.forEach(function (result) {
+      var messages = result.messages
+      messages.forEach(function (message) {
+        errors.push(util.format(
+          template,
+          result.filePath, message.line || 0, message.column || 0, message.message,
+          // TODO: this creates whitespace ad end of line... make it better
+          opts.verbose ? message.ruleId : ''
+        ))
+      })
+    })
+
+    return eslintResults.errorCount ? 1 : 0
   }
 
   function findBinPath (bin, cb) {
