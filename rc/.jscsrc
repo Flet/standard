@@ -4,5 +4,6 @@
   "esnext": true,
   "requireOperatorBeforeLineBreak": ["=", "+", "-", "/", "*", "==", "===", "!=", "!==", ">", ">=", "<", "<="],
   "requireSpacesInForStatement": true,
-  "validateLineBreaks": "LF"
+  "validateLineBreaks": "LF",
+  "esprima" : "esprima-fb"
 }
